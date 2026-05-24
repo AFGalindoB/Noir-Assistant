@@ -203,7 +203,5 @@ Fiel a la filosofía de Software Libre, **Noir Assistant** es una herramienta ab
 
 Para más detalles técnicos sobre la implementación consulte:
 
-### Flujo de Datos
-* [Flujo de Datos con Room (Persistencia de Tareas y Notas)](docs/Room_Data_Flow.md)
-* [Flujo de Preferencias con DataStore (Perfil de Usuario)](docs/DataStore_Data_Flow.md)
+* [Protocolos de Persistencia](docs/Persistence_Standards.md)
 * [Ciclo de Vida de Notificaciones y Alarmas (Resiliencia)](docs/Notifications_Logic.md)

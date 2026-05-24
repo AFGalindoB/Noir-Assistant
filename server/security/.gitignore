@@ -1,0 +1,10 @@
+# =========================
+# Rust
+# =========================
+
+target/
+
+# Compiled Python extensions
+*.pyd
+*.so
+*.dll

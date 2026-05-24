@@ -1,0 +1,24 @@
+[package]
+name = "noir-setup"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "noir_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rpassword = "7.0"
+anyhow = "1.0"
+rand = "0.8"
+base64 = "0.22"
+
+# Para Python
+pyo3 = { version = "0.23", features = ["extension-module"] }
+
+jsonwebtoken = "9.3"
+chrono = { version = "0.4", features = ["serde"] }
+
+notify = "6.1.1"

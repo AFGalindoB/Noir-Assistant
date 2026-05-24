@@ -1,0 +1,23 @@
+# ========================================================= 
+# Android / IntelliJ 
+# =========================================================
+*.iml
+.gradle
+.kotlin/
+
+build/ 
+app/build/ 
+baselineprofile/build/
+
+.idea/caches
+.idea/libraries
+.idea/modules.xml
+.idea/workspace.xml
+.idea/navEditor.xml
+.idea/assetWizardSettings.xml
+
+local.properties
+
+/captures
+.externalNativeBuild
+.cxx
