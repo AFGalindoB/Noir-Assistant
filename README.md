@@ -1,207 +1,219 @@
-# Noir Assistant
+# Noir Assistant V2.0.0
 
 ![Logo App](docs/images/logo.png)
 
-**Noir Assistant** es una herramienta de organización personal diseñada para funcionar como un asistente útil, modular y eficiente. Su enfoque principal es la centralización de tareas y notas bajo una arquitectura sólida y almacenamiento local, permitiendo al usuario gestionar su día a día con rapidez y estructura.
+**Noir Assistant** es una plataforma personal de captura y organización de información diseñada bajo una arquitectura *offline-first*, modular y reactiva.
 
-Inspirada en la agilidad de herramientas de productividad modernas, busca ofrecer una experiencia fluida donde la gestión de la información sea inmediata y privada.
+Su objetivo es permitir que el usuario registre información de forma rápida y natural mientras mantiene control local sobre sus datos, configuración y flujo de trabajo.
 
-## Vista previa
+La aplicación combina un cliente Android moderno desarrollado con Jetpack Compose junto a una infraestructura de procesamiento desacoplada para ofrecer:
 
-![Pantalla principal](docs/images/home.jpeg)
+* Gestión de tareas y notas.
+* Captura de información mediante audio.
+* Procesamiento remoto de voz a texto.
+* Persistencia local reactiva.
+* Funcionamiento resiliente ante interrupciones de conectividad.
 
----
+Uno de los pilares del proyecto es la soberanía de los datos. Noir Assistant no depende de servicios propietarios obligatorios ni de infraestructuras centralizadas. El usuario puede desplegar y administrar su propio servidor, manteniendo control sobre la infraestructura utilizada por el sistema y conservando la información persistente dentro de su dispositivo.
+
+La arquitectura adopta un modelo donde el cliente Android constituye la fuente principal de datos y estado de la aplicación. Los servicios remotos actúan exclusivamente como proveedores de capacidades especializadas de procesamiento y no como repositorios centrales de información.
+
+Este enfoque permite reducir dependencias permanentes de conectividad, mejorar la resiliencia operativa y mantener una experiencia consistente incluso cuando la infraestructura remota no se encuentra disponible.
+
+La versión `2.0.0` introduce una evolución completa de la arquitectura incorporando procesamiento remoto desacoplado de audio, autenticación modular, persistencia reactiva unificada y una refactorización integral orientada a escalabilidad, mantenibilidad y resiliencia.
 
 ## Funcionalidades
 
-### Gestión de Tareas
+### Gestión de Tareas y Notas
 
-![Crear o editar tarea](docs/images/form.jpeg)
+![Pantalla principal](docs/images/home.jpeg)
 
-- **Control Total (CRUD):** Creación y edición de tareas a través de un diálogo unificado, reutilizando la misma interfaz para mantener consistencia y reducir fricción en la interacción.
+La aplicación centraliza tareas y notas dentro de una experiencia unificada, rápida y consistente, diseñada para minimizar distracciones y facilitar la organización diaria.
 
-- **Eliminación con Gestos:** Las tareas pueden eliminarse mediante swipe horizontal hacia la derecha, proporcionando una interacción rápida y natural.
+- Creación y edición rápida mediante diálogos unificados
+- Organización temporal de actividades y contenido
+- Sistema de eliminación reversible con papelera integrada
+- Interacciones optimizadas mediante gestos y acciones rápidas
+- Persistencia local robusta y reactiva
+- Actualización reactiva automática de contenido
 
-- **Deshacer Acciones (Undo):** Al eliminar una tarea, se muestra un SnackBar que permite revertir la acción antes de que se envíe definitivamente a la papelera.
+---
 
-- **Seguimiento Eficiente:** Asignación de fechas y estados de finalización para el control de actividades.
+### Captura Inteligente de Audio
 
-- **Organización Temporal:** Visualización de tareas agrupadas por secciones de tiempo en la interfaz principal, facilitando la planificación y visualización.
+![Pantalla audios](docs/images/audio.jpeg)
 
-### Gestión de Notas
+Noir Assistant permite capturar información mediante notas de voz y enviarlas posteriormente a una infraestructura de procesamiento especializada.
 
-- **Captura Rápida y Flexible:** Creación y edición de notas mediante un diálogo unificado, priorizando velocidad y mínima fricción al registrar ideas.
+Las grabaciones permanecen almacenadas localmente y pueden ser procesadas bajo demanda mediante una cola persistente diseñada para tolerar interrupciones de conectividad y reinicios de la aplicación.
 
-- **Interacción Consistente:** Comparte patrones de uso con el sistema de tareas (creación, edición y eliminación), manteniendo una experiencia uniforme en toda la aplicación.
+- Grabación de audio integrada
+- Procesamiento remoto bajo demanda
+- Conversión de voz a estructuras organizadas
+- Cola persistente de procesamiento
+- Recuperación automática ante fallos
+- Persistencia reactiva y resiliente
 
-- **Modelo Simplificado:** A diferencia de las tareas, las notas no incluyen estados ni temporalidad, enfocándose en contenido libre y sin estructura rígida.
+---
 
-- **Persistencia Robusta:** Construido sobre la misma base de almacenamiento confiable, garantizando consistencia y estabilidad en los datos.
+### Experiencia de Usuario
 
-### Navegación
+La experiencia de usuario fue diseñada bajo una filosofía reactiva y offline-first, priorizando fluidez, claridad visual y continuidad operativa incluso ante cambios de conectividad o reinicios del sistema.
 
-- **Estructura por Contextos:** La aplicación organiza su flujo en secciones principales:
-  - Inicio (Tareas y Notas)
-  - Papelera
-  - Cuenta
-- **Menú Lateral (Drawer):** La navegación global se gestiona mediante una barra lateral deslizable, que cubre la pantalla y permite cambiar de contexto de forma clara y centralizada.
-- **Navegación Local (Bottom Bar):** Dentro del contexto principal (Inicio), se utiliza una barra inferior para alternar rápidamente entre:
-  - Tareas 
-  - Notas
-  
-Esto evita sobrecargar el menú principal con cambios frecuentes donde se distinguen dos niveles de navegación:
-- Global: cambio de secciones (drawer)
-- Local: cambio de contenido dentro de una sección (bottom bar)
-
-### Papelera de Reciclaje (Soft Delete)
-
-![Papelera de reciclaje](docs/images/trash.jpeg)
-
-- **Borrado Lógico:** Tanto tareas como notas implementan eliminación lógica mediante un campo deletedAt lo que evita eliminaciones inmediatas y protege contra pérdida de datos.
-  - `0L` → la entidad está activa
-  - `> 0` → la entidad fue enviada a la papelera
-
-- **Expiración Automática:** Al eliminar una entidad, se asigna una fecha de expiración (por defecto 30 días). Antes de inicializar la UI, el sistema: Verifica entidades expiradas y ejecuta su eliminación definitiva. Lo que mantiene la base de datos limpia sin intervención del usuario. 
-
-- **Restauración Controlada:** Desde la papelera, el usuario puede restaurar elementos mediante un boton.
-  - La restauración devuelve la entidad a su estado activo 
-  - Se muestra un SnackBar con opción de deshacer
-
-- **Eliminación Permanente:**
-  - También es posible eliminar definitivamente una entidad de forma manual: Acción mediante un botón
-  - Confirmación a través de diálogo de advertencia evitando eliminación accidental mediante fricción intencional.
-
-### Cuenta de Usuario y Preferencias
-
-- **Gestión de Perfil:** Pantalla de cuenta integral que permite la personalización de la identidad del usuario (nombre, biografía y foto de perfil) con estados de edición y visualización diferenciados.
-- **Sistema de Edición de Imagen:** Implementación de un visor de recorte circular personalizado.
-  - Soporte para gestos multitáctiles (pan y zoom) mediante graphicsLayer para ajustar la composición de la foto de perfil.
-  - Persistencia de coordenadas de transformación (X, Y) y nivel de escala (zoom) para garantizar un renderizado consistente sin procesar la imagen físicamente.
-- **Internacionalización Dinámica**:
-  - Selector de idioma in-app (Español/Inglés) que permite al usuario sobrescribir el idioma de la app en tiempo de ejecución. 
-  - Aplicación reactiva de Locales mediante AppCompatDelegate, permitiendo cambios de idioma en tiempo real sin reiniciar la aplicación.
-- **Persistencia con Jetpack DataStore:** Almacenamiento reactivo mediante flujos de datos (Flow). 
-  - Arquitectura desacoplada: el sistema distingue entre actualizaciones de perfil (identidad) y actualizaciones de configuración (accesibilidad/idioma) para optimizar el rendimiento.
-- **Configuración de Recordatorios:** Implementación de un selector de hora interactivo para personalizar la alerta diaria.
-  - **Selector de Rueda Finito:** Diseño de un `FiniteWheelPicker` para horas y minutos que ofrece un desplazamiento suave, deteniéndose en los límites de tiempo.
-  - **Feedback Visual Dinámico:** Los elementos de la rueda ajustan su opacidad (alpha) en tiempo real según su proximidad al centro, proporcionando una experiencia visual fluida.
-  - **Sincronización de Preferencias:** La hora seleccionada se persiste en DataStore y se vincula con el sistema de notificaciones para garantizar la puntualidad de los avisos.
+#### Personalización e Internacionalización
 
 ![Pantalla de cuenta](docs/images/account.jpeg)
 
-### Sistema de Notificaciones Resilientes
-- **Recordatorios Proactivos:** Sistema de alertas automáticas de manera diaria que informan al usuario sobre el estado de sus tareas pendientes y atrasadas.
-- **Arquitectura de Alta Precisión:** - **AlarmManager (`setAlarmClock`):** Implementación de alarmas de precisión extrema que garantizan la ejecución incluso en modos de ahorro de energía agresivos (Doze Mode).
-  - **WorkManager:** Gestión de tareas en segundo plano para procesar la lógica de negocio y preparar el contenido de la notificación de forma eficiente.
-- **Resiliencia ante Reinicios:** Uso de `RECEIVE_BOOT_COMPLETED` para re-agendar automáticamente los recordatorios al encender el dispositivo, asegurando que el asistente nunca pierda su ciclo de alerta.
-- **Interfaz Visual Adaptativa:** Notificaciones con estilo enriquecido que incluyen el logo de identidad de la app y soporte para mensajes expandibles, facilitando la lectura de listas de tareas desde la pantalla de bloqueo.
+- Cambio dinámico de idioma dentro de la aplicación
+- Personalización de perfil e identidad visual
+- Configuración persistente de preferencias
+- Sistema de foto de perfil con edición interactiva
 
-### Sistema de Arranque y Optimización
-- **Inicio Optimizado (Baseline Profiles):** La aplicación incorpora Baseline Profiles para mejorar el rendimiento en tiempo de arranque, reduciendo tiempos de carga y evitando compilación en caliente en rutas críticas.
-- **Inicialización Controlada:** Antes de renderizar la UI, se ejecuta una fase de preparación donde se garantiza que el estado base de la aplicación esté listo.
-- **Precarga de Datos (Warm-Up):** El MainViewModel actúa como punto de entrada del sistema y realiza una precarga de la base de datos, asegurando que:
-  - Las consultas iniciales estén listas
-  - Se reduzca latencia en la primera renderización evitando el “lag inicial” típico al abrir la app.
-- **Sincronización de Configuración Global:** Durante el arranque, el MainViewModel obtiene el idioma persistido y lo aplica. Lo que hace que la aplicación inicia directamente en el idioma correcto, sin transiciones visibles.
+#### Recuperación y Protección de Información
 
----
+![Pantalla papelera](docs/images/trash.jpeg)
 
-## Arquitectura y Flujo de Datos
-
-- **Arquitectura Unidireccional:**  
-  Separación estricta entre las capas de:
-    - Base de Datos (Room/DataStore)
-    - Dominio
-    - UI
-
-  Esto facilita el mantenimiento y la escalabilidad del proyecto.
-
-- **Reactividad:**  
-  Uso de flujos reactivos (`Flow`) para que la interfaz se actualice automáticamente ante cualquier cambio en la base de datos.
-
-- **Optimización:**  
-  Implementación de **Baseline Profiles** para maximizar el rendimiento en la ejecución y reducir los tiempos de arranque.
+- Papelera integrada para contenido eliminado
+- Restauración de tareas, notas y audios
+- Protección ante eliminaciones accidentales
+- Conservación temporal antes de eliminación definitiva
 
 ---
 
-## Tecnologías utilizadas
+### Procesamiento Desacoplado y Resiliencia
 
-- **Kotlin** 
-  Lenguaje principal para la lógica de negocio.
+Noir Assistant adopta una arquitectura offline-first donde la información persistente permanece almacenada localmente en el dispositivo.
 
-- **Jetpack Compose**  
-  Framework moderno para la construcción de interfaces declarativas y reactivas.
+Los servicios remotos no actúan como una fuente principal de datos. Su función consiste en proporcionar capacidades especializadas de procesamiento que pueden utilizarse cuando sea necesario.
 
-- **Room Persistence**  
-  Biblioteca de abstracción sobre SQLite para el almacenamiento local y seguro de datos.
+Este enfoque permite:
 
-- **Material Design 3**  
-  Estándar de diseño para componentes reutilizables y modulares.
-
-- **Jetpack DataStore**
-  Persistencia de datos de configuración y perfil.
-
-- **Coil**
-  Carga de imágenes asíncrona.
-
-- **AppCompat Library**
-  Utilizada como puente para la gestión avanzada de localización e internacionalización, permitiendo el cambio de idioma in-app
-
-- **Baseline Profiles**  
-  Herramienta de optimización de rendimiento en tiempo de ejecución.
-
-- **WorkManager**
-  Programación de tareas en segundo plano garantizadas y persistentes. **[Nuevo]**
-
-- **AlarmManager**
-  Programación de eventos exactos a nivel de sistema. **[Nuevo]**
-
-- **Broadcast Receivers**
-  Escucha de eventos del sistema (como el arranque del dispositivo) para mantener la continuidad del servicio. **[Nuevo]**
+- Persistencia local como fuente principal de datos
+- Procesamiento remoto bajo demanda
+- Cola persistente de solicitudes
+- Recuperación automática de estado
+- Gestión resiliente de conectividad
+- Estados globales de infraestructura
+- Continuidad operativa ante reinicios y fallos parciales
 
 ---
 
-## Requisitos del Sistema y Especificaciones Técnicas
-- **Min SDK:** API 26 (Android 8.0 Oreo) — Garantiza compatibilidad con funciones modernas de notificaciones y gestión de alarmas.
+### Sistema de Recordatorios Persistentes
 
-- **Target SDK:** API 35 (Android 15) — La aplicación está optimizada para las versiones más recientes del sistema.
+La aplicación incorpora un sistema de recordatorios diseñado para mantener continuidad operativa incluso ante reinicios del dispositivo o cierres inesperados.
 
-- **Versión Actual De La Aplicación:** 1.3.0 (Build 5).
+- Recordatorios diarios configurables
+- Reprogramación automática tras reinicios
+- Notificaciones persistentes
+- Ejecución resiliente en segundo plano
+
+## Tecnologías Utilizadas
+
+Noir Assistant combina tecnologías modernas de desarrollo móvil, persistencia local y procesamiento remoto para construir una plataforma reactiva, resiliente y preparada para evolucionar de forma independiente en cada una de sus capas.
+
+### Cliente Android
+
+- **Kotlin** — Lenguaje principal de desarrollo.
+- **Jetpack Compose** — Construcción de interfaces declarativas y reactivas.
+- **Material Design 3** — Sistema moderno de diseño visual.
+- **Room** — Persistencia local estructurada y reactiva.
+- **Jetpack DataStore** — Gestión persistente de preferencias y configuración.
+- **Coroutines & Flow** — Manejo asíncrono y reactivo de estados.
+- **OkHttp** — Comunicación HTTP desacoplada con el backend.
+
+---
+
+### Backend y Procesamiento
+
+- **FastAPI** — Backend principal y gestión de endpoints REST.
+- **Python** — Procesamiento de audio y lógica de integración.
+- **Rust** — Servicios críticos orientados a rendimiento y seguridad.
+- **Redis** — Gestión temporal de sesiones y estados efímeros.
+- **SQLite** — Persistencia ligera para servicios y metadatos del backend.
+- **Faster-Whisper Large** — Conversión de voz a texto ejecutada dentro de la infraestructura de procesamiento.
+- **Structured Data Pipeline** — Transformación automática de transcripciones en estructuras organizadas consumibles por la aplicación.
 
 ---
 
-## Cómo ejecutar el proyecto 🚀
+### Arquitectura y Rendimiento Android
 
-Para tener una copia local de **Noir Assistant** en funcionamiento, sigue estos pasos:
+- **MVVM + Repository Pattern** — Arquitectura modular y escalable.
+- **Repository-Centric Architecture** — Coordinación desacoplada entre dominio, persistencia e infraestructura.
+- **Offline-First Architecture** — Persistencia local como núcleo operativo.
+- **Reactive State Management** — Propagación reactiva de estado entre persistencia, dominio y presentación.
+- **Baseline Profiles** — Optimización avanzada de tiempos de arranque y ejecución.
 
-1. **Clonar el repositorio desde Android Studio:**
-   - Abre Android Studio.
-   - En la pantalla de bienvenida o en el menú superior, selecciona **File > New > Project from Version Control...**
-   - En la opción **Repository URL**, pega el enlace de este repositorio: `https://github.com/AFGalindoB/Noir-Assistant.git`
-   - Haz clic en **Clone**.
-2. **Sincronización de Gradle:**
-   - Una vez finalizada la clonación, Android Studio detectará automáticamente los archivos de configuración.
-   - Espera a que la barra de progreso de **Gradle Sync** termine de descargar todas las dependencias necesarias.
-3. **Ejecución:**
-  - Conecta un dispositivo físico (con la depuración USB activada) o inicia un emulador.
-  - Haz clic en el botón **Run** (el icono de "Play" verde ▶️) en la barra de herramientas superior.
-  - El proceso de `build` compilará el proyecto e instalará la aplicación automáticamente.
+## Plataformas Validadas
 
-> **Nota:** Asegúrate de tener instalada la versión más reciente de Android Studio y el SDK de Android correspondiente para garantizar la compatibilidad con Jetpack Compose y las dependencias.
+La infraestructura backend ha sido probada exitosamente en:
+
+| Sistema Operativo | Arquitectura |
+| ----------------- | ------------ |
+| Windows           | x86_64       |
+| Linux             | ARM64        |
+
+La arquitectura del servidor fue diseñada para mantener compatibilidad multiplataforma siempre que las dependencias de procesamiento utilizadas por el sistema estén disponibles para la plataforma objetivo.
+
+## Requisitos del Sistema
+
+### Cliente Android
+
+- **Android mínimo:** Android 8.0 Oreo (API 26)
+- **Target SDK:** Android 15 (API 35)
+- **Java:** 17
+- **Kotlin JVM Target:** 17
+
+La aplicación fue desarrollada utilizando tecnologías modernas del ecosistema Android con una arquitectura reactiva y offline-first.
 
 ---
+
+### Backend y Procesamiento
+
+El backend está construido sobre una arquitectura desacoplada orientada a procesamiento de audio y gestión distribuida de sesiones.
+
+#### Stack Principal
+
+- **Python 3.13**
+- **FastAPI**
+- **Rust (Edition 2021)**
+- **Redis**
+- **SQLite**
+
+#### Dependencias Principales
+
+- **Uvicorn** — Servidor ASGI para FastAPI
+- **PyJWT** — Gestión de autenticación basada en JWT
+- **Jinja2** — Renderizado de vistas administrativas
+- **QRCode + Pillow** — Generación de códigos QR y procesamiento auxiliar de imágenes
+- **PyO3** — Integración nativa entre Rust y Python
+
+#### Procesamiento Inteligente de Audio
+
+- **Faster-Whisper Large** — Conversión avanzada de voz a texto mediante inferencia local.
+- Pipeline preparado para transformación automática de audio en estructuras JSON organizadas.
 
 ## Licencia
 
-Este proyecto está bajo la **Licencia MIT**.
+Este proyecto se distribuye bajo la **Licencia MIT**.
 
-Fiel a la filosofía de Software Libre, **Noir Assistant** es una herramienta abierta, escalable y adaptable, diseñada para ser un asistente personal eficiente y centrado en el usuario.
+Noir Assistant sigue una filosofía de desarrollo abierta, modular y extensible, orientada a construir un asistente personal centrado en privacidad, resiliencia y control local de los datos.
 
 ---
 
-## Documentación adicional
+## Documentación Técnica
 
-Para más detalles técnicos sobre la implementación consulte:
+La documentación técnica describe la arquitectura, persistencia, procesamiento de audio, infraestructura backend y funcionamiento interno del sistema.
 
-* [Protocolos de Persistencia](docs/Persistence_Standards.md)
-* [Ciclo de Vida de Notificaciones y Alarmas (Resiliencia)](docs/Notifications_Logic.md)
+### Cliente Android
+
+* [Sistema de Datos y Persistencia](./docs/android/data_system/Data_System.md)
+* [Ciclo de Vida de Notificaciones y Alarmas](./docs/android/notifications_system/Notifications_System.md)
+* [Sistema de Navegacion de Pantallas](./docs/android/navigation_system/Navigation_System.md)
+
+### Backend
+
+* Documentación del servidor (próximamente)
+
+---
+
+Noir Assistant es un proyecto enfocado en construir una plataforma personal de captura y organización de información donde la persistencia local, el procesamiento desacoplado y la soberanía de los datos constituyen los pilares fundamentales de la arquitectura.
