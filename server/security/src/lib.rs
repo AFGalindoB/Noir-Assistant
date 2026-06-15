@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
 use std::time::Duration as StdDuration;
 use chrono::{Utc, Duration as ChronoDuration}; 
+use bcrypt::{hash, verify, DEFAULT_COST};
 
 use notify::{Watcher, RecursiveMode, Config as NotifyConfig};
 
@@ -151,7 +152,8 @@ fn create_default_config(
     port: u16,
     server_name: String,
     jwt_expire_days: u32,
-    qr_expiration_minutes: u32
+    qr_expiration_minutes: u32,
+    admin_password: String
 ) -> PyResult<bool> {
     let path = get_config_path(&config_dir_path);
     let path_str = path.to_str()
@@ -164,6 +166,10 @@ fn create_default_config(
     println!("⚙️ Rust: Generando llave criptográfica segura de 64 bytes...");
     let jwt_secret = generate_jwt_secret();
 
+    println!("🔐 Rust: Hasheando contraseña de administrador...");
+    let hashed_password = hash(admin_password, DEFAULT_COST)
+        .map_err(|e| PyRuntimeError::new_err(format!("Error al procesar la contraseña: {}", e)))?;
+
     let config = Config {
         server: ServerConfig {
             domain,
@@ -173,6 +179,7 @@ fn create_default_config(
         auth: AuthConfig {
             jwt_secret,
             jwt_expire_days,
+            admin_password_hash: hashed_password, // <-- 3. Guardar el hash
         },
         qr: QrConfig {
             expiration_minutes: qr_expiration_minutes,
@@ -189,6 +196,16 @@ fn create_default_config(
 
     println!("🎉 Rust: Archivo config.json creado exitosamente en: {:?}", path);
     Ok(true)
+}
+
+#[pyfunction]
+fn verify_admin_password(config_dir_path: String, password_to_check: String) -> PyResult<bool> {
+    let cfg = load_config(&config_dir_path).map_err(PyRuntimeError::new_err)?;
+    
+    let is_valid = verify(password_to_check, &cfg.auth.admin_password_hash)
+        .map_err(|e| PyRuntimeError::new_err(format!("Error al verificar hash: {}", e)))?;
+        
+    Ok(is_valid)
 }
 
 #[pyfunction]
@@ -267,6 +284,7 @@ fn noir_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     security_mod.add_function(wrap_pyfunction!(validate_token, &security_mod)?)?;
     security_mod.add_function(wrap_pyfunction!(get_server_domain, &security_mod)?)?;
     security_mod.add_function(wrap_pyfunction!(get_server_port, &security_mod)?)?;
+    security_mod.add_function(wrap_pyfunction!(verify_admin_password, &security_mod)?)?;
     m.add_submodule(&security_mod)?;
 
     let utils_mod = PyModule::new_bound(py, "noir_utils")?;

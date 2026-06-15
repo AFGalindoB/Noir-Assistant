@@ -11,6 +11,7 @@ pub struct ServerConfig {
 pub struct AuthConfig {
     pub jwt_secret: String,        // ← Ahora guardamos el secreto aquí (temporal)
     pub jwt_expire_days: u32,
+    pub admin_password_hash: String,
 }
 
 #[derive(Serialize, Deserialize)]
