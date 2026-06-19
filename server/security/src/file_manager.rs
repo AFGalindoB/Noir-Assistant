@@ -1,14 +1,14 @@
-use anyhow::{Context, Result};
 use serde::Serialize;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::Path;
+use anyhow::{Context, Result, bail};
 
 /// Módulo encargado de todas las operaciones de archivos
 pub struct FileManager;
 
 impl FileManager {
     pub fn write_json<T: Serialize>(path: &str, data: &T) -> Result<()> {
-        // Crear directorios padres si no existen
         if let Some(parent) = Path::new(path).parent() {
             fs::create_dir_all(parent)
                 .context(format!("No se pudo crear el directorio para {}", path))?;
@@ -20,7 +20,7 @@ impl FileManager {
         fs::write(path, json)
             .context(format!("Error al escribir el archivo {}", path))?;
 
-        println!("📁 Archivo guardado: {}", path);
+        println!("📁 Archivo JSON guardado: {}", path);
         Ok(())
     }
 
@@ -41,5 +41,36 @@ impl FileManager {
     pub fn read_string(path: &str) -> Result<String> {
         fs::read_to_string(path)
             .context(format!("No se pudo leer el archivo: {}", path))
+    }
+
+    pub fn upsert_string(path: &str, content: &str) -> Result<()> {
+        let path_obj = Path::new(path);
+
+        if let Some(parent) = path_obj.parent() {
+            if !parent.exists() {
+                bail!(
+                    "Fallo de entorno: El directorio padre esperado '{:?}' no existe de forma física. Abortando operación.", 
+                    parent
+                );
+            }
+        } else {
+            bail!("La ruta proporcionada '{}' no tiene un directorio contenedor válido.", path);
+        }
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .context(format!("No se pudo abrir o crear el archivo en modo upsert: {}", path))?;
+
+        file.write_all(content.as_bytes())
+            .context(format!("Error de bajo nivel al escribir contenido en: {}", path))?;
+
+        file.flush()
+            .context(format!("Error al sincronizar los buffers en el disco: {}", path))?;
+
+        println!("[Rust: FileManager] Upsert de archivo completado con éxito en: {}", path);
+        Ok(())
     }
 }

@@ -3,6 +3,7 @@ use pyo3::exceptions::{PyValueError, PyRuntimeError};
 use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
 use serde::{Serialize, Deserialize};
 use std::path::{Path, PathBuf};
+use anyhow::{Context, Result as AnyhowResult};
 
 use std::sync::mpsc::channel;
 use std::time::Duration as StdDuration;
@@ -37,6 +38,10 @@ fn get_config_path<P: AsRef<Path>>(config_dir_path: P) -> PathBuf {
         .join("config.json")
 }
 
+fn get_secret_path<P: AsRef<Path>>(config_dir_path: P) -> PathBuf {
+    Path::new(config_dir_path.as_ref()).join(".secret")
+}
+
 fn load_config<P: AsRef<Path>>(config_dir_path: P) -> Result<Config, String> {
     let path = get_config_path(config_dir_path);
     
@@ -47,10 +52,39 @@ fn load_config<P: AsRef<Path>>(config_dir_path: P) -> Result<Config, String> {
         .map_err(|e| format!("Error al cargar configuración en {:?}: {}", path, e))
 }
 
-fn generate_jwt_secret() -> String {
+fn generate_and_save_jwt_secret(absolute_path: &str) -> AnyhowResult<String> {
+    println!("⚙️ Rust: Iniciando generación de entropía para llave criptográfica...");
     let mut bytes = [0u8; 64];
     rand::thread_rng().fill_bytes(&mut bytes);
-    URL_SAFE_NO_PAD.encode(bytes)
+    let raw_jwt_secret = URL_SAFE_NO_PAD.encode(bytes);
+
+    // Invocamos el nuevo método de abstracción de archivos
+    FileManager::upsert_string(absolute_path, &raw_jwt_secret)
+        .context("Fallo crítico en la capa de persistencia al procesar el upsert del secreto")?;
+    
+    Ok(".secret".to_string())
+}
+
+fn load_jwt_secret(config_dir_path: &str, relative_secret_path: &str) -> AnyhowResult<String> {
+    let absolute_path = Path::new(config_dir_path).join(relative_secret_path);
+    
+    let path_str = absolute_path.to_str()
+        .context("La ruta del secreto contiene caracteres Unicode inválidos")?;
+
+    if !FileManager::exists(path_str) {
+        println!("⚠️ Rust [Runtime]: Se intentó leer el secreto pero el archivo '{}' no existe.", relative_secret_path);
+        println!("🔄 Rust [Runtime]: Regenerando llave criptográfica ausente en caliente...");
+        
+        generate_and_save_jwt_secret(path_str)
+            .context("Fallo crítico al intentar autorecuperar el secreto en tiempo de ejecución")?;
+            
+        println!("✅ Rust [Runtime]: Llave regenerada con éxito.");
+    }
+
+    let secret_content = FileManager::read_string(path_str)
+        .context("No se pudo leer el archivo físico del secreto")?;
+
+    Ok(secret_content)
 }
 
 fn json_filename_error_log(py: Python<'_>, err: PyErr) {
@@ -59,6 +93,59 @@ fn json_filename_error_log(py: Python<'_>, err: PyErr) {
 }
 
 // ====================== FUNCIONES PARA PYTHON ======================
+
+#[pyfunction]
+fn create_default_config(
+    config_dir_path: String,
+    domain: String,
+    port: u16,
+    server_name: String,
+    jwt_expire_days: u32,
+    qr_expiration_minutes: u32,
+    admin_password: String
+) -> PyResult<bool> {
+    let config_path = get_config_path(&config_dir_path);
+    let secret_path = get_secret_path(&config_dir_path);
+    
+    let config_path_str = config_path.to_str()
+        .ok_or_else(|| PyValueError::new_err("Ruta de archivo de configuración inválida"))?;
+    let secret_path_str = secret_path.to_str()
+        .ok_or_else(|| PyValueError::new_err("Ruta de archivo secreto inválida"))?;
+
+    if FileManager::exists(config_path_str) {
+        return Err(PyRuntimeError::new_err("El archivo de configuración ya existe de forma física. Abortando sobreescritura."));
+    }
+
+    let jwt_secret_relative_path = generate_and_save_jwt_secret(secret_path_str)
+        .map_err(|e| PyRuntimeError::new_err(format!("Error en infraestructura de llaves: {}", e)))?;
+
+    println!("Rust: Hasheando contraseña de administrador...");
+    let hashed_password = hash(admin_password, DEFAULT_COST)
+        .map_err(|e| PyRuntimeError::new_err(format!("Error al procesar la contraseña: {}", e)))?;
+
+    let config = Config {
+        server: ServerConfig {
+            domain,
+            port,
+            name: server_name,
+        },
+        auth: AuthConfig {
+            jwt_secret_path: jwt_secret_relative_path,
+            jwt_expire_days,
+            admin_password_hash: hashed_password,
+        },
+        qr: QrConfig {
+            expiration_minutes: qr_expiration_minutes,
+        },
+    };
+
+    FileManager::write_json(config_path_str, &config)
+        .map_err(|e| PyRuntimeError::new_err(format!("Error de persistencia del JSON: {}", e)))?;
+
+    println!("🎉 Rust: Entorno de configuración inicializado con éxito.");
+    Ok(true)
+}
+
 #[pyfunction]
 fn generate_approval_token(
     config_dir_path: String,
@@ -68,22 +155,25 @@ fn generate_approval_token(
 ) -> PyResult<(String, String)> {
     let cfg = load_config(&config_dir_path).map_err(PyRuntimeError::new_err)?;
 
+    let jwt_secret_content = load_jwt_secret(&config_dir_path, &cfg.auth.jwt_secret_path)
+        .map_err(|e| PyRuntimeError::new_err(format!("Fallo de seguridad al cargar la llave: {}", e)))?;
+
     let iat = Utc::now();
     let exp_date = iat + ChronoDuration::days(cfg.auth.jwt_expire_days as i64);
 
     let my_claims = Claims {
-        sub: device_id.clone(), // Clonamos para los log s si es necesario
+        sub: device_id.clone(),
         device_name: device_name.clone(),
         username: username.clone(),
         iss: cfg.server.name,
         iat: iat.timestamp() as usize,
         exp: exp_date.timestamp() as usize,
     };
-    
+
     let token = encode(
         &Header::default(),
         &my_claims,
-        &EncodingKey::from_secret(cfg.auth.jwt_secret.as_bytes()),
+        &EncodingKey::from_secret(jwt_secret_content.as_bytes()),
     ).map_err(|e| PyRuntimeError::new_err(format!("Error al firmar: {}", e)))?;
 
     let exp_str = exp_date.format("%Y-%m-%d %H:%M:%S").to_string();
@@ -102,11 +192,15 @@ fn validate_token(
     username: String
 ) -> PyResult<bool> {
     let cfg = load_config(&config_dir_path).map_err(PyRuntimeError::new_err)?;
+
+    let jwt_secret_content = load_jwt_secret(&config_dir_path, &cfg.auth.jwt_secret_path)
+        .map_err(|e| PyRuntimeError::new_err(format!("Fallo de seguridad al cargar la llave: {}", e)))?;
+    
     let validation = Validation::default();
     
     match decode::<Claims>(
         &token,
-        &DecodingKey::from_secret(cfg.auth.jwt_secret.as_bytes()),
+        &DecodingKey::from_secret(jwt_secret_content.as_bytes()),
         &validation,
     ) {
         Ok(data) => {
@@ -132,69 +226,33 @@ fn validate_token(
 
 #[pyfunction]
 fn init_security(config_dir_path: String) -> PyResult<bool> {
-    let path = get_config_path(&config_dir_path);
-    let path_str = path.to_str()
+    let config_path = get_config_path(&config_dir_path);
+    let config_path_str = config_path.to_str()
         .ok_or_else(|| PyValueError::new_err("Ruta de directorio de configuración inválida"))?;
         
-    if !FileManager::exists(path_str) {
-        println!("⚠️ Rust: No se encontró config.json en: {:?}. Se requiere inicialización.", path);
+    if !FileManager::exists(config_path_str) {
+        println!("⚠️ Rust: No se encontró config.json en: {:?}. Se requiere inicialización completa.", config_path);
         return Ok(false);
     }
     
-    println!("🔐 Rust: Seguridad verificada con éxito.");
-    Ok(true)
-}
+    let cfg = load_config(&config_dir_path).map_err(PyRuntimeError::new_err)?;
+    
+    let secret_path = get_secret_path(&config_dir_path);
+    let secret_path_str = secret_path.to_str()
+        .ok_or_else(|| PyValueError::new_err("Ruta del archivo secreto inválida durante la verificación"))?;
 
-#[pyfunction]
-fn create_default_config(
-    config_dir_path: String,
-    domain: String,
-    port: u16,
-    server_name: String,
-    jwt_expire_days: u32,
-    qr_expiration_minutes: u32,
-    admin_password: String
-) -> PyResult<bool> {
-    let path = get_config_path(&config_dir_path);
-    let path_str = path.to_str()
-        .ok_or_else(|| PyValueError::new_err("Ruta de directorio de configuración inválida"))?;
-
-    if FileManager::exists(path_str) {
-        return Err(PyRuntimeError::new_err("El archivo de configuración ya existe de forma física. Abortando sobreescritura."));
+    if !FileManager::exists(secret_path_str) {
+        println!("Rust [Integridad]: 'config.json' presente pero '{}' no fue encontrado.", cfg.auth.jwt_secret_path);
+        println!("Rust [Autorrecuperación]: Reconstruyendo llave criptográfica ausente...");
+        
+        generate_and_save_jwt_secret(secret_path_str)
+            .map_err(|e| PyRuntimeError::new_err(format!("Fallo crítico en la autorrecuperación del secreto: {}", e)))?;
+            
+        println!("Rust [Integridad]: Llave criptográfica regenerada y sincronizada exitosamente.");
+        println!("Rust: Es posible que los dispositivos ya autorizados necesiten nuevas creedenciales.")
     }
-
-    println!("⚙️ Rust: Generando llave criptográfica segura de 64 bytes...");
-    let jwt_secret = generate_jwt_secret();
-
-    println!("🔐 Rust: Hasheando contraseña de administrador...");
-    let hashed_password = hash(admin_password, DEFAULT_COST)
-        .map_err(|e| PyRuntimeError::new_err(format!("Error al procesar la contraseña: {}", e)))?;
-
-    let config = Config {
-        server: ServerConfig {
-            domain,
-            port,
-            name: server_name,
-        },
-        auth: AuthConfig {
-            jwt_secret,
-            jwt_expire_days,
-            admin_password_hash: hashed_password, // <-- 3. Guardar el hash
-        },
-        qr: QrConfig {
-            expiration_minutes: qr_expiration_minutes,
-        },
-    };
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| PyRuntimeError::new_err(format!("No se pudo asegurar el directorio de configuración: {}", e)))?;
-    }
-
-    FileManager::write_json(path_str, &config)
-        .map_err(|e| PyRuntimeError::new_err(format!("Error de persistencia del JSON: {}", e)))?;
-
-    println!("🎉 Rust: Archivo config.json creado exitosamente en: {:?}", path);
+    
+    println!("Rust: Seguridad e integridad verificadas con éxito.");
     Ok(true)
 }
 
