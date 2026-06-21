@@ -15,6 +15,7 @@ anyhow = "1.0"
 rand = "0.8"
 base64 = "0.22"
 bcrypt = "0.15"
+zeroize = { version = "1.8", features = ["derive"] }
 
 # Para Python
 pyo3 = { version = "0.23", features = ["extension-module"] }

@@ -6,7 +6,6 @@ import json
 import data.database as db
 import data.redis_manager as rm
 from noir_core import noir_security
-from path_manager import PathManager
 
 class AdminApp:
     def __init__(self, root):
@@ -14,9 +13,8 @@ class AdminApp:
         self.root.title("Noir Assistant - Admin Panel")
         self.root.geometry("600x700")
 
-        config_path = PathManager.get_config_dir()
-        self.server_domain = noir_security.get_server_domain(config_path)
-        self.server_port = noir_security.get_server_port(config_path)
+        self.server_domain = noir_security.get_server_domain()
+        self.server_port = noir_security.get_server_port()
         db.init_db()
 
         self.header_qr = "noir-app-v2.0.0"

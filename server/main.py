@@ -19,6 +19,7 @@ class NoirSystem:
         self.server_thread = None
         self.watcher_thread = None
         self.host = "0.0.0.0"
+        self.TIMEOUT_MS = 300000
 
     def validate_password_format(self, password: str) -> bool:
         """Verifica longitud mínima de 8, un número y un carácter especial."""
@@ -33,44 +34,89 @@ class NoirSystem:
             return False
         return True
 
-    def prepare_environment(self):
-        """Delega la creación física de carpetas al PathManager."""
-        PathManager.initialize_directories()
+    def prompt_config_inputs(self) -> tuple:
+        """
+        Función independiente encargada puramente de la interacción con el usuario
+        para recolectar los datos de configuración inicial.
+        """
+
+        print("\n✨ [Security] Asistente de configuración de Noir Assistant...")
+        domain = input("Ingrese el dominio para el servidor: ")
+        
+        while True:
+            try:
+                port = int(input("Ingrese el puerto para el servidor: "))
+                break
+            except ValueError:
+                print("⚠️ Por favor, ingrese un número de puerto válido.")
+
+        server_name = input("Ingrese un nombre para el servidor: ")
+        
+        while True:
+            try:
+                jwt_expire_days = int(input("Ingrese los días de expiración para JWT: "))
+                qr_expiration_minutes = int(input("Ingrese los minutos de expiración para QR: "))
+                break
+            except ValueError:
+                print("⚠️ Por favor, ingrese valores numéricos válidos.")
+
+        while True:
+            print("\n--- Configuración de credenciales de Administrador ---")
+            password = getpass.getpass("Establezca la contraseña maestra de administrador: ")
+            
+            if self.validate_password_format(password):
+                confirm_password = getpass.getpass("Confirme la contraseña: ")
+                if password == confirm_password:
+                    break
+                print("❌ Las contraseñas no coinciden. Intente de nuevo.")
+                
+        return domain, port, server_name, jwt_expire_days, qr_expiration_minutes, password
 
     def check_services(self):
         """Verifica la integridad de los servicios externos y seguridad."""
         print("[System] Verificando servicios...")
-        
-        # Configs
-        try:
-            config_path = PathManager.get_config_dir()
-            if not noir_security.init_security(config_path):
-                print("⚠️ [Security] Configuración de seguridad no encontrada. Iniciando asistente de configuración...")
-                domain = input("Ingrese el dominio para el servidor: ")
-                port = int(input("Ingrese el puerto para el servidor: "))
-                server_name = input("Ingrese un nombre para el servidor: ")
-                jwt_expire_days = int(input("Ingrese los días de expiración para JWT: "))
-                qr_expiration_minutes = int(input("Ingrese los minutos de expiración para QR: "))
 
+        PathManager.initialize_directories()
+
+        config_path = PathManager.get_config_dir()
+
+        entorno_existe = noir_utils.is_configured(config_path)
+
+        if entorno_existe:
+            try:
+                print("[Security] Entorno detectado.")
+                password = getpass.getpass("Introduzca la contraseña maestra para iniciar el sistema: ")
                 
-                while True:
-                    print("\n--- Configuración de credenciales de Administrador ---")
-                    password = getpass.getpass("Establezca la contraseña de administrador: ")
-                    
-                    if self.validate_password_format(password):
-                        confirm_password = getpass.getpass("Confirme la contraseña: ")
-                        if password == confirm_password:
-                            break
-                        print("❌ Las contraseñas no coinciden. Intente de nuevo.")
+                noir_security.init_security(config_path, password)
+                print("✅ [Security] Entorno verificado y cargado en RAM.")
+            except FileNotFoundError:
+                print("\n⚠️ [Anomalía] El archivo config.json desapareció inesperadamente antes de la carga.")
 
-                noir_security.create_default_config(
-                    config_path, domain, port, server_name, jwt_expire_days, qr_expiration_minutes, password
-                )
-                print("✅ Configuración de seguridad creada exitosamente.")
-        
-        except Exception as e:
-            print(f"❌ [FATAL] Error en Rust Core: {e}")
-            return False
+                domain, port, s_name, jwt_days, qr_min, password = self.prompt_config_inputs()
+                
+                try:
+                    noir_security.create_default_config(config_path, domain, port, s_name, jwt_days, qr_min, password)
+                    noir_security.init_security(config_path, password)
+                    print("Configuración de seguridad regenerada y cargada en RAM con éxito.")
+                except Exception as e:
+                    print(f"[FATAL] Error al recrear el entorno volátil: {e}")
+                    return False
+                    
+            except ValueError as e:
+                print(f"❌ [Security] Acceso Denegado: {e}")
+                return False
+            except Exception as e:
+                print(f"❌ [FATAL] Error inesperado en el Rust Core: {e}")
+                return False
+        else:
+            domain, port, s_name, jwt_days, qr_min, password = self.prompt_config_inputs()
+            try:
+                noir_security.create_default_config(config_path, domain, port, s_name, jwt_days, qr_min, password)
+                noir_security.init_security(config_path, password)
+                print("✅ Configuración de seguridad inicializada y cargada en RAM exitosamente.")
+            except Exception as e:
+                print(f"❌ [FATAL] Error en la inicialización base: {e}")
+                return False
 
         # Redis
         print("[System] Verificando conexión a Redis...")
@@ -88,7 +134,6 @@ class NoirSystem:
         """El hilo del centinela llama a la librería de utilidades."""
         try:
             upload_path = PathManager.get_upload_dir()
-            # Invocamos la función desde el nuevo módulo de utilidades
             noir_utils.start_audio_watcher(upload_path, self.on_audio_received_callback)
         except Exception as e:
             print(f"⚠️ [Watcher Error] Error en el hilo de utilidades de Rust: {e}")
@@ -96,8 +141,7 @@ class NoirSystem:
     def run_api_server(self):
         """Lógica para ejecutar Uvicorn."""
         try:
-            config_path = PathManager.get_config_dir()
-            port = noir_security.get_server_port(config_path)
+            port = noir_security.get_server_port()
             print(f"🚀 [Server] Motor API activo en http://{self.host}:{port}")
             uvicorn.run(app, host=self.host, port=port, log_level="info")
         except Exception as e:
@@ -140,8 +184,6 @@ class NoirSystem:
     def start(self):
         """Punto de entrada principal del sistema."""
         
-        self.prepare_environment()
-        
         if not self.check_services():
             print("[System] Abortando por fallo en servicios.")
             return
@@ -154,12 +196,6 @@ class NoirSystem:
 
         opciones = {"Abrir Panel de Administración (GUI)":1, "Salir la Aplicación":2}
         lista_opciones = list(opciones.keys())
-
-        # Tiempo de vida del panel en milisegundos (Ejemplo: 5 minutos = 300000 ms)
-        # Para pruebas rápidas puedes usar 10000 (10 segundos)
-        TIMEOUT_MS = 300000 
-
-        config_path = PathManager.get_config_dir()
 
         while True:
             print("\n" + "="*40)
@@ -178,7 +214,8 @@ class NoirSystem:
                     print("\n🔒 Acceso Restringido")
                     password_input = getpass.getpass("Introduce la contraseña de administrador: ")
             
-                    if noir_security.verify_admin_password(config_path, password_input):
+                    try:
+                        noir_security.verify_admin_password(password_input)
                         print("🔓 Acceso concedido. Lanzando Panel de Administración...")
 
                         try:
@@ -192,7 +229,7 @@ class NoirSystem:
                                 if hasattr(self, 'root') and self.root:
                                     self.root.destroy()
 
-                            self.root.after(TIMEOUT_MS, auto_close_panel)
+                            self.root.after(self.TIMEOUT_MS, auto_close_panel)
 
                             try:
                                 self.root.mainloop() 
@@ -206,8 +243,11 @@ class NoirSystem:
                             print(f"   Detalle: {e}")
                             print("   Sugerencia: Asegúrate de estar en un entorno con servidor gráfico activo (X11/Wayland) o reenvío de GUI (SSH -X).")
                             print("   El servidor CLI y el backend siguen ejecutándose con normalidad.\n")
-                    else:
-                        print("❌ Contraseña incorrecta. Acceso denegado.")
+                    except ValueError:
+                        print("[Error] Contraseña incorrecta. Acceso denegado.")
+                    except Exception as e:
+                        print(f"[FATAL] Error inesperado en el Rust Core: {e}")
+                        return False
                         
                 elif opcion == 2:
                     print("\n[System] Iniciando el proceso de apagado...")

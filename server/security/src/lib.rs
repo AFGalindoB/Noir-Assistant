@@ -1,5 +1,5 @@
 use pyo3::prelude::*;
-use pyo3::exceptions::{PyValueError, PyRuntimeError};
+use pyo3::exceptions::{PyValueError, PyRuntimeError, PyFileNotFoundError};
 use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
 use serde::{Serialize, Deserialize};
 use std::path::{Path, PathBuf};
@@ -19,7 +19,10 @@ use base64::Engine;
 mod file_manager;
 mod config;
 use crate::file_manager::FileManager;
-use crate::config::{Config, ServerConfig, AuthConfig, QrConfig};
+use crate::config::{
+    Config, ServerConfig, AuthConfig, QrConfig, InMemorySecret,
+    CONFIG_CONTAINER, JWT_SECRET_CONTAINER, get_config_from_ram, get_jwt_secret_from_ram
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
@@ -52,38 +55,23 @@ fn load_config<P: AsRef<Path>>(config_dir_path: P) -> Result<Config, String> {
         .map_err(|e| format!("Error al cargar configuración en {:?}: {}", path, e))
 }
 
-fn generate_and_save_jwt_secret(absolute_path: &str) -> AnyhowResult<String> {
+fn generate_and_save_jwt_secret(absolute_path: &str, _admin_password: &str) -> AnyhowResult<String> {
     println!("⚙️ Rust: Iniciando generación de entropía para llave criptográfica...");
     let mut bytes = [0u8; 64];
     rand::thread_rng().fill_bytes(&mut bytes);
     let raw_jwt_secret = URL_SAFE_NO_PAD.encode(bytes);
 
-    // Invocamos el nuevo método de abstracción de archivos
     FileManager::upsert_string(absolute_path, &raw_jwt_secret)
         .context("Fallo crítico en la capa de persistencia al procesar el upsert del secreto")?;
     
     Ok(".secret".to_string())
 }
 
-fn load_jwt_secret(config_dir_path: &str, relative_secret_path: &str) -> AnyhowResult<String> {
-    let absolute_path = Path::new(config_dir_path).join(relative_secret_path);
-    
-    let path_str = absolute_path.to_str()
-        .context("La ruta del secreto contiene caracteres Unicode inválidos")?;
-
-    if !FileManager::exists(path_str) {
-        println!("⚠️ Rust [Runtime]: Se intentó leer el secreto pero el archivo '{}' no existe.", relative_secret_path);
-        println!("🔄 Rust [Runtime]: Regenerando llave criptográfica ausente en caliente...");
-        
-        generate_and_save_jwt_secret(path_str)
-            .context("Fallo crítico al intentar autorecuperar el secreto en tiempo de ejecución")?;
-            
-        println!("✅ Rust [Runtime]: Llave regenerada con éxito.");
-    }
-
-    let secret_content = FileManager::read_string(path_str)
+fn load_jwt_secret_from_file(absolute_path: &str, _admin_password: &str) -> AnyhowResult<String> {
+    let secret_content = FileManager::read_string(absolute_path)
         .context("No se pudo leer el archivo físico del secreto")?;
 
+    // TODO: Aquí se aplicará el descifrado simétrico usando 'admin_password' antes de retornar
     Ok(secret_content)
 }
 
@@ -93,6 +81,57 @@ fn json_filename_error_log(py: Python<'_>, err: PyErr) {
 }
 
 // ====================== FUNCIONES PARA PYTHON ======================
+
+#[pyfunction]
+fn is_configured(config_dir_path: String) -> PyResult<bool> {
+    let config_path = get_config_path(&config_dir_path);
+    let config_path_str = config_path.to_str()
+        .ok_or_else(|| PyValueError::new_err("Ruta de directorio de configuración inválida"))?;
+        
+    Ok(FileManager::exists(config_path_str))
+}
+
+#[pyfunction]
+fn init_security(config_dir_path: String, admin_password: String) -> PyResult<bool> {
+    if !is_configured(config_dir_path.clone())? {
+        return Err(PyFileNotFoundError::new_err(
+            "No se encontró config.json. El sistema no está configurado."
+        ));
+    }
+    
+    let cfg = load_config(&config_dir_path).map_err(PyRuntimeError::new_err)?;
+
+    if CONFIG_CONTAINER.set(cfg.clone()).is_err() {
+        println!("ℹ️ Rust [Memory]: El contenedor de Configuración ya estaba en RAM.");
+    }
+
+    verify_admin_password(admin_password.clone())?;
+
+    let secret_path = get_secret_path(&config_dir_path);
+    let secret_path_str = secret_path.to_str()
+        .ok_or_else(|| PyValueError::new_err("Ruta del archivo secreto inválida"))?;
+
+    if !FileManager::exists(secret_path_str) {
+        println!("⚠️ Rust [Integridad]: El archivo '.secret' no existe física o localmente.");
+        println!("🔄 Rust [Autorrecuperación]: Regenerando llave criptográfica ausente bajo demanda...");
+        
+        // init llama a generar usando la contraseña
+        generate_and_save_jwt_secret(secret_path_str, &admin_password)
+            .map_err(|e| PyRuntimeError::new_err(format!("Fallo crítico al autorecuperar el secreto: {}", e)))?;
+            
+        println!("✅ Rust [Autorrecuperación]: Llave regenerada con éxito.");
+    }
+
+    let raw_secret = load_jwt_secret_from_file(secret_path_str, &admin_password)
+        .map_err(|e| PyRuntimeError::new_err(format!("Error en el ciclo de carga del secreto: {}", e)))?;
+
+    if JWT_SECRET_CONTAINER.set(InMemorySecret { content: raw_secret }).is_err() {
+        println!("ℹ️ Rust [Memory]: El contenedor del Secret ya estaba en RAM.");
+    }
+
+    println!("🔐 Rust: Entorno verificado, autenticado y mapeado en RAM con éxito.");
+    Ok(true)
+}
 
 #[pyfunction]
 fn create_default_config(
@@ -116,7 +155,7 @@ fn create_default_config(
         return Err(PyRuntimeError::new_err("El archivo de configuración ya existe de forma física. Abortando sobreescritura."));
     }
 
-    let jwt_secret_relative_path = generate_and_save_jwt_secret(secret_path_str)
+    let jwt_secret_relative_path = generate_and_save_jwt_secret(secret_path_str, &admin_password)
         .map_err(|e| PyRuntimeError::new_err(format!("Error en infraestructura de llaves: {}", e)))?;
 
     println!("Rust: Hasheando contraseña de administrador...");
@@ -148,15 +187,12 @@ fn create_default_config(
 
 #[pyfunction]
 fn generate_approval_token(
-    config_dir_path: String,
     device_id: String,
     device_name: String,
     username: String
 ) -> PyResult<(String, String)> {
-    let cfg = load_config(&config_dir_path).map_err(PyRuntimeError::new_err)?;
-
-    let jwt_secret_content = load_jwt_secret(&config_dir_path, &cfg.auth.jwt_secret_path)
-        .map_err(|e| PyRuntimeError::new_err(format!("Fallo de seguridad al cargar la llave: {}", e)))?;
+    let cfg = get_config_from_ram().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let jwt_secret_content = get_jwt_secret_from_ram().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
     let iat = Utc::now();
     let exp_date = iat + ChronoDuration::days(cfg.auth.jwt_expire_days as i64);
@@ -165,7 +201,7 @@ fn generate_approval_token(
         sub: device_id.clone(),
         device_name: device_name.clone(),
         username: username.clone(),
-        iss: cfg.server.name,
+        iss: cfg.server.name.clone(),
         iat: iat.timestamp() as usize,
         exp: exp_date.timestamp() as usize,
     };
@@ -186,15 +222,11 @@ fn generate_approval_token(
 
 #[pyfunction]
 fn validate_token(
-    config_dir_path: String,
     token: String,
     device_id: String,
     username: String
 ) -> PyResult<bool> {
-    let cfg = load_config(&config_dir_path).map_err(PyRuntimeError::new_err)?;
-
-    let jwt_secret_content = load_jwt_secret(&config_dir_path, &cfg.auth.jwt_secret_path)
-        .map_err(|e| PyRuntimeError::new_err(format!("Fallo de seguridad al cargar la llave: {}", e)))?;
+    let jwt_secret_content = get_jwt_secret_from_ram().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
     
     let validation = Validation::default();
     
@@ -225,57 +257,29 @@ fn validate_token(
 }
 
 #[pyfunction]
-fn init_security(config_dir_path: String) -> PyResult<bool> {
-    let config_path = get_config_path(&config_dir_path);
-    let config_path_str = config_path.to_str()
-        .ok_or_else(|| PyValueError::new_err("Ruta de directorio de configuración inválida"))?;
+fn verify_admin_password(password_to_check: String) -> PyResult<bool> {
+    let cfg = get_config_from_ram().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    
+    let is_valid = verify(&password_to_check, &cfg.auth.admin_password_hash)
+        .map_err(|e| PyRuntimeError::new_err(format!("Error interno al verificar hash: {}", e)))?;
         
-    if !FileManager::exists(config_path_str) {
-        println!("⚠️ Rust: No se encontró config.json en: {:?}. Se requiere inicialización completa.", config_path);
-        return Ok(false);
+    if !is_valid {
+        return Err(PyValueError::new_err("Contraseña de administrador incorrecta. Acceso denegado."));
     }
     
-    let cfg = load_config(&config_dir_path).map_err(PyRuntimeError::new_err)?;
-    
-    let secret_path = get_secret_path(&config_dir_path);
-    let secret_path_str = secret_path.to_str()
-        .ok_or_else(|| PyValueError::new_err("Ruta del archivo secreto inválida durante la verificación"))?;
-
-    if !FileManager::exists(secret_path_str) {
-        println!("Rust [Integridad]: 'config.json' presente pero '{}' no fue encontrado.", cfg.auth.jwt_secret_path);
-        println!("Rust [Autorrecuperación]: Reconstruyendo llave criptográfica ausente...");
-        
-        generate_and_save_jwt_secret(secret_path_str)
-            .map_err(|e| PyRuntimeError::new_err(format!("Fallo crítico en la autorrecuperación del secreto: {}", e)))?;
-            
-        println!("Rust [Integridad]: Llave criptográfica regenerada y sincronizada exitosamente.");
-        println!("Rust: Es posible que los dispositivos ya autorizados necesiten nuevas creedenciales.")
-    }
-    
-    println!("Rust: Seguridad e integridad verificadas con éxito.");
     Ok(true)
 }
 
 #[pyfunction]
-fn verify_admin_password(config_dir_path: String, password_to_check: String) -> PyResult<bool> {
-    let cfg = load_config(&config_dir_path).map_err(PyRuntimeError::new_err)?;
-    
-    let is_valid = verify(password_to_check, &cfg.auth.admin_password_hash)
-        .map_err(|e| PyRuntimeError::new_err(format!("Error al verificar hash: {}", e)))?;
-        
-    Ok(is_valid)
+fn get_server_domain() -> PyResult<String> {
+    let cfg = get_config_from_ram().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    Ok(cfg.server.domain.clone())
 }
 
 #[pyfunction]
-fn get_server_domain(config_dir_path: String) -> PyResult<String> {
-    let cfg = load_config(&config_dir_path).map_err(PyRuntimeError::new_err)?;
-    Ok(cfg.server.domain)
-}
-
-#[pyfunction]
-fn get_server_port(config_dir_path: String) -> PyResult<u16> {
-    let cfg = load_config(&config_dir_path).map_err(PyRuntimeError::new_err)?;
-    Ok(cfg.server.port)
+fn get_server_port() -> PyResult<u16> {
+    let cfg = get_config_from_ram().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    Ok(cfg.server.port.clone())
 }
 
 #[pyfunction]
@@ -347,6 +351,7 @@ fn noir_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     let utils_mod = PyModule::new_bound(py, "noir_utils")?;
     utils_mod.add_function(wrap_pyfunction!(start_audio_watcher, &utils_mod)?)?;
+    utils_mod.add_function(wrap_pyfunction!(is_configured, &utils_mod)?)?;
     m.add_submodule(&utils_mod)?;
 
     Ok(())

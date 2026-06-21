@@ -99,7 +99,6 @@ def get_token(device_id: str, device_name: str, username: str) -> dict:
                 return {"success": False, "diagnostic": "El acceso para este dispositivo está desactivado."}
 
             token, expires_at = noir_security.generate_approval_token(
-                PathManager.get_config_dir(),
                 device_id, 
                 device_name, 
                 username

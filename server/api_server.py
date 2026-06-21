@@ -188,7 +188,7 @@ async def verify_device_access(device_id: str, token: str, username: str):
     y el estado del dispositivo en SQLite.
     """
     
-    if not noir_security.validate_token(PathManager.get_config_dir(), token, device_id, username):
+    if not noir_security.validate_token(token, device_id, username):
         raise HTTPException(
             status_code=401, 
             detail="Credenciales Inválidas."
