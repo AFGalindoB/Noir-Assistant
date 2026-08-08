@@ -24,6 +24,12 @@ use crate::config::{
     CONFIG_CONTAINER, JWT_SECRET_CONTAINER, get_config_from_ram, get_jwt_secret_from_ram
 };
 
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce
+};
+use argon2::Argon2;
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
     sub: String,      // device_id
@@ -35,6 +41,73 @@ struct Claims {
 }
 
 // ====================== FUNCIONES INTERNAS ======================
+
+fn derive_key_from_password(password: &str, salt: &[u8]) -> AnyhowResult<[u8; 32]> {
+    let mut key = [0u8; 32];
+    let argon2 = Argon2::default();
+    
+    argon2.hash_password_into(password.as_bytes(), salt, &mut key)
+        .map_err(|e| anyhow::anyhow!("Error al derivar clave con Argon2: {}", e))?;
+        
+    Ok(key)
+}
+
+fn encrypt_secret(raw_secret: &str, admin_password: &str) -> AnyhowResult<String> {
+    // Generar Salt único para Argon2 (16 bytes)
+    let mut salt = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut salt);
+
+    // Derivar clave criptográfica
+    let derived_key = derive_key_from_password(admin_password, &salt)?;
+    let cipher = Aes256Gcm::new_from_slice(&derived_key)
+        .map_err(|e| anyhow::anyhow!("Error al crear cifrador AES: {}", e))?;
+
+    // Generar Nonce/IV único de 12 bytes para AES-GCM
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes); // 👈 Corregido: &mut nonce_bytes
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    // Cifrar el texto plano
+    let ciphertext = cipher.encrypt(nonce, raw_secret.as_bytes())
+        .map_err(|e| anyhow::anyhow!("Fallo al cifrar datos con AES-GCM: {}", e))?;
+
+    // Empaquetar todo: [16 bytes Salt] + [12 bytes Nonce] + [bytes cifrados]
+    let mut payload = Vec::with_capacity(salt.len() + nonce_bytes.len() + ciphertext.len());
+    payload.extend_from_slice(&salt);
+    payload.extend_from_slice(&nonce_bytes);
+    payload.extend_from_slice(&ciphertext);
+
+    // Guardar como Base64 URL-safe
+    Ok(URL_SAFE_NO_PAD.encode(payload))
+}
+
+fn decrypt_secret(encrypted_base64: &str, admin_password: &str) -> AnyhowResult<String> {
+    let payload = URL_SAFE_NO_PAD.decode(encrypted_base64)
+        .context("El archivo .secret no contiene una estructura Base64 válida")?;
+
+    if payload.len() < (16 + 12 + 1) {
+        anyhow::bail!("El archivo .secret está corrupto o es demasiado corto");
+    }
+
+    // Desempaquetar los segmentos
+    let salt = &payload[0..16];
+    let nonce_bytes = &payload[16..28];
+    let ciphertext = &payload[28..];
+
+    // Derivar clave utilizando el mismo Salt recuperado
+    let derived_key = derive_key_from_password(admin_password, salt)?;
+    let cipher = Aes256Gcm::new_from_slice(&derived_key)
+        .map_err(|e| anyhow::anyhow!("Error al recrear cifrador AES: {}", e))?;
+
+    let nonce = Nonce::from_slice(nonce_bytes);
+
+    // Descifrar
+    let decrypted_bytes = cipher.decrypt(nonce, ciphertext)
+        .map_err(|_| anyhow::anyhow!("Contraseña de admin incorrecta o archivo .secret alterado"))?;
+
+    String::from_utf8(decrypted_bytes)
+        .context("El texto descifrado no contiene caracteres UTF-8 válidos")
+}
 
 fn get_config_path<P: AsRef<Path>>(config_dir_path: P) -> PathBuf {
     Path::new(config_dir_path.as_ref())
@@ -55,24 +128,29 @@ fn load_config<P: AsRef<Path>>(config_dir_path: P) -> Result<Config, String> {
         .map_err(|e| format!("Error al cargar configuración en {:?}: {}", path, e))
 }
 
-fn generate_and_save_jwt_secret(absolute_path: &str, _admin_password: &str) -> AnyhowResult<String> {
+// 👈 Corregido: renombrado de _admin_password a admin_password
+fn generate_and_save_jwt_secret(absolute_path: &str, admin_password: &str) -> AnyhowResult<String> {
     println!("⚙️ Rust: Iniciando generación de entropía para llave criptográfica...");
     let mut bytes = [0u8; 64];
     rand::thread_rng().fill_bytes(&mut bytes);
     let raw_jwt_secret = URL_SAFE_NO_PAD.encode(bytes);
 
-    FileManager::upsert_string(absolute_path, &raw_jwt_secret)
+    let encrypted_secret = encrypt_secret(&raw_jwt_secret, admin_password)?;
+
+    FileManager::upsert_string(absolute_path, &encrypted_secret)
         .context("Fallo crítico en la capa de persistencia al procesar el upsert del secreto")?;
     
     Ok(".secret".to_string())
 }
 
-fn load_jwt_secret_from_file(absolute_path: &str, _admin_password: &str) -> AnyhowResult<String> {
-    let secret_content = FileManager::read_string(absolute_path)
+// 👈 Corregido: renombrado de _admin_password a admin_password
+fn load_jwt_secret_from_file(absolute_path: &str, admin_password: &str) -> AnyhowResult<String> {  
+    let encrypted_content = FileManager::read_string(absolute_path)
         .context("No se pudo leer el archivo físico del secreto")?;
 
-    // TODO: Aquí se aplicará el descifrado simétrico usando 'admin_password' antes de retornar
-    Ok(secret_content)
+    let raw_secret = decrypt_secret(&encrypted_content, admin_password)?;
+
+    Ok(raw_secret)
 }
 
 fn json_filename_error_log(py: Python<'_>, err: PyErr) {
@@ -95,7 +173,7 @@ fn is_configured(config_dir_path: String) -> PyResult<bool> {
 fn init_security(config_dir_path: String, admin_password: String) -> PyResult<bool> {
     if !is_configured(config_dir_path.clone())? {
         return Err(PyFileNotFoundError::new_err(
-            "No se encontró config.json. El sistema no está configurado."
+            "No se encontró las de configuraciones. El sistema no está configurado."
         ));
     }
     
@@ -115,7 +193,6 @@ fn init_security(config_dir_path: String, admin_password: String) -> PyResult<bo
         println!("⚠️ Rust [Integridad]: El archivo '.secret' no existe física o localmente.");
         println!("🔄 Rust [Autorrecuperación]: Regenerando llave criptográfica ausente bajo demanda...");
         
-        // init llama a generar usando la contraseña
         generate_and_save_jwt_secret(secret_path_str, &admin_password)
             .map_err(|e| PyRuntimeError::new_err(format!("Fallo crítico al autorecuperar el secreto: {}", e)))?;
             
@@ -284,7 +361,7 @@ fn get_server_port() -> PyResult<u16> {
 
 #[pyfunction]
 fn start_audio_watcher(
-    py: Python<'_>, // 1. Solicitamos el token del hilo de Python actual en los argumentos
+    py: Python<'_>,
     upload_dir_path: String, 
     callback: PyObject
 ) -> PyResult<()> {
@@ -307,20 +384,16 @@ fn start_audio_watcher(
     watcher.watch(path_to_watch, RecursiveMode::NonRecursive)
         .map_err(|e| PyRuntimeError::new_err(format!("Error al activar observación: {}", e)))?;
 
-    // 2. 🚀 LIBERAMOS EL GIL AQUÍ MIENTRAS ESCUCHAMOS EL EMBUDO DE EVENTOS
     py.allow_threads(|| {
         for res in rx {
             match res {
                 Ok(event) => {
                     if event.kind.is_create() || event.kind.is_modify() {
-                        
-                        // 3. READQUIRIMOS el GIL de forma segura única y exclusivamente
-                        // para ejecutar la función de callback de Python
                         Python::with_gil(|py_gil| {
                             println!("🔔 Rust [Watcher]: ¡Detectado nuevo archivo! Avisando al backend...");
                             
                             let _ = callback.call0(py_gil).map_err(|e| {
-                                json_filename_error_log(py_gil, e); // Manejo preventivo
+                                json_filename_error_log(py_gil, e);
                             });
                         });
                     }
@@ -339,7 +412,7 @@ fn start_audio_watcher(
 fn noir_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
 
-    let security_mod = PyModule::new_bound(py, "noir_security")?;
+    let security_mod = PyModule::new(py, "noir_security")?;
     security_mod.add_function(wrap_pyfunction!(init_security, &security_mod)?)?;
     security_mod.add_function(wrap_pyfunction!(create_default_config, &security_mod)?)?;
     security_mod.add_function(wrap_pyfunction!(generate_approval_token, &security_mod)?)?;
@@ -349,7 +422,7 @@ fn noir_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     security_mod.add_function(wrap_pyfunction!(verify_admin_password, &security_mod)?)?;
     m.add_submodule(&security_mod)?;
 
-    let utils_mod = PyModule::new_bound(py, "noir_utils")?;
+    let utils_mod = PyModule::new(py, "noir_utils")?;
     utils_mod.add_function(wrap_pyfunction!(start_audio_watcher, &utils_mod)?)?;
     utils_mod.add_function(wrap_pyfunction!(is_configured, &utils_mod)?)?;
     m.add_submodule(&utils_mod)?;
